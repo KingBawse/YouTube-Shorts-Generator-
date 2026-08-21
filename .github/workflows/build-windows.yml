@@ -40,8 +40,11 @@ jobs:
 
       - name: Verify FFmpeg was bundled
         run: |
-          if ((Get-Item "dist/shorts-generator.exe").Length -lt 100MB) {
-            Write-Error "dist/shorts-generator.exe looks too small -- FFmpeg may not have bundled correctly."
+          $exe = Get-Item "dist/shorts-generator.exe" -ErrorAction Stop
+          $sizeMB = [math]::Round($exe.Length / 1MB, 1)
+          Write-Host "dist/shorts-generator.exe is $sizeMB MB"
+          if ($exe.Length -lt 100MB) {
+            Write-Error "dist/shorts-generator.exe looks too small ($sizeMB MB) -- FFmpeg may not have bundled correctly. Check the 'Build shorts-generator.exe' step's log above for what ffmpeg-binaries reported."
             exit 1
           }
 
