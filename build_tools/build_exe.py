@@ -92,6 +92,8 @@ def _bundled_binary_args() -> list:
 
     ffmpeg_path = ffmpeg_binaries.FFMPEG_PATH
     ffprobe_path = ffmpeg_binaries.FFPROBE_PATH
+    print(f"ffmpeg-binaries reports FFMPEG_PATH  = {ffmpeg_path}")
+    print(f"ffmpeg-binaries reports FFPROBE_PATH = {ffprobe_path}")
     if not ffmpeg_path or not ffprobe_path:
         print(
             "WARNING: 'ffmpeg-binaries' is installed but couldn't find its "
@@ -100,14 +102,25 @@ def _bundled_binary_args() -> list:
         )
         return []
 
+    for label, candidate in (("ffmpeg", ffmpeg_path), ("ffprobe", ffprobe_path)):
+        candidate = Path(candidate)
+        if not candidate.is_file():
+            print(f"WARNING: {label} path reported above does not actually exist on disk: {candidate}")
+            print("The built .exe will require a system FFmpeg install instead.")
+            return []
+        size_mb = candidate.stat().st_size / (1024 * 1024)
+        print(f"  found {label}: {candidate} ({size_mb:.1f} MB)")
+
     # PyInstaller's --add-binary format is "SRC<sep>DEST", where DEST is
     # relative to the bundle root; "." places it right next to the
     # extracted app, where bundled_ffmpeg.py looks for it. The separator
     # must be the OS's own os.pathsep.
-    return [
+    args = [
         f"--add-binary={ffmpeg_path}{os.pathsep}.",
         f"--add-binary={ffprobe_path}{os.pathsep}.",
     ]
+    print(f"Passing to PyInstaller: {args}")
+    return args
 
 
 def main() -> None:
@@ -124,8 +137,15 @@ def main() -> None:
         "--noconfirm",
         *_bundled_binary_args(),
     ])
+
+    exe_name = "shorts-generator.exe" if sys.platform == "win32" else "shorts-generator"
+    exe_path = ROOT / "dist" / exe_name
     print("\nBuild complete.")
-    print(f"Executable: {ROOT / 'dist'}")
+    if exe_path.is_file():
+        size_mb = exe_path.stat().st_size / (1024 * 1024)
+        print(f"Executable: {exe_path} ({size_mb:.1f} MB)")
+    else:
+        print(f"WARNING: expected output not found at {exe_path}")
     print("Remember to copy settings.ini and any assets/ next to the built executable.")
 
 
