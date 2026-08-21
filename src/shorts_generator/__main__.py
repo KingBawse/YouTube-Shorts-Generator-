@@ -1,98 +1,108 @@
-# Builds a real, self-contained Windows executable on an actual Windows
-# GitHub Actions runner (PyInstaller cannot cross-compile, so this step
-# genuinely has to run on Windows -- it cannot be done from a Linux/macOS
-# machine or CI runner).
-#
-# Trigger it either:
-#   - manually: repo's "Actions" tab -> "Build Windows exe" -> "Run workflow"
-#   - automatically: push a tag like "v1.0.0" (this also publishes a
-#     GitHub Release with the .exe attached, ready to download)
-#
-# Either way, the output is downloadable from the "Actions" run's
-# "Artifacts" section, or from the repo's "Releases" page for a tagged
-# build -- both are the ordinary "click to download" experience.
-name: Build Windows exe
+"""
+Command-line entry point.
 
-on:
-  workflow_dispatch: {}
-  push:
-    tags:
-      - "v*"
+Designed for two audiences at once:
 
-jobs:
-  build:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+* A non-technical user who drops videos into an ``input`` folder next to
+  a distributed executable and double-clicks it (or a ``.bat``/shell
+  wrapper) -- running with no arguments at all reads ``settings.ini``
+  from the current/executable directory and just works.
+* A technical user/CI job that wants explicit control -- every setting
+  can be overridden on the command line without editing settings.ini.
+"""
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+from __future__ import annotations
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r build_tools/requirements-windows.txt
+import argparse
+import sys
+from pathlib import Path
 
-      - name: Build shorts-generator.exe
-        run: python build_tools/build_exe.py
+from .config import ConfigError, load_settings
+from .logger import setup_logging
+from .pipeline import run_batch
 
-      - name: Verify FFmpeg was bundled
-        run: |
-          $exe = Get-Item "dist/shorts-generator.exe" -ErrorAction Stop
-          $sizeMB = [math]::Round($exe.Length / 1MB, 1)
-          Write-Host "dist/shorts-generator.exe is $sizeMB MB"
 
-          # Ask the built exe itself where it thinks its bundled ffmpeg/ffprobe
-          # are (this exercises the exact same lookup the real app uses at
-          # runtime), then actually execute what it finds -- a file-size
-          # guess isn't reliable evidence either way (PyInstaller may apply
-          # UPX compression on this runner, which can shrink stripped FFmpeg
-          # builds a lot without breaking them).
-          $diag = & "dist/shorts-generator.exe" --print-bundled-ffmpeg
-          $diag | ForEach-Object { Write-Host $_ }
+def _default_settings_path() -> Path:
+    """Locate settings.ini next to the frozen executable, or next to this script when run from source."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller sets sys.frozen=True and sys.executable to the .exe path.
+        base_dir = Path(sys.executable).resolve().parent
+    else:
+        base_dir = Path.cwd()
+    return base_dir / "settings.ini"
 
-          $ffmpegPath = ($diag | Where-Object { $_ -like "FFMPEG=*" }) -replace '^FFMPEG=', ''
-          $ffprobePath = ($diag | Where-Object { $_ -like "FFPROBE=*" }) -replace '^FFPROBE=', ''
 
-          if ([string]::IsNullOrEmpty($ffmpegPath) -or $ffmpegPath -eq "NONE" -or [string]::IsNullOrEmpty($ffprobePath) -or $ffprobePath -eq "NONE") {
-            Write-Error "The built exe did not report a bundled ffmpeg/ffprobe (ffmpeg=$ffmpegPath ffprobe=$ffprobePath)."
-            exit 1
-          }
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="shorts-generator",
+        description="Batch-convert landscape/portrait source videos into vertical YouTube Shorts.",
+    )
+    parser.add_argument(
+        "-c", "--settings", type=Path, default=None,
+        help="Path to settings.ini (default: settings.ini next to the executable/current directory).",
+    )
+    parser.add_argument("--input-dir", type=Path, default=None, help="Override [paths] input_dir.")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Override [paths] output_dir.")
+    parser.add_argument(
+        "--fit-mode", type=str, default=None,
+        help="Override [background] fit_mode for this run only.",
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", default=None,
+        help="Overwrite existing output files (overrides [batch] overwrite_existing).",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug-level logging.")
+    parser.add_argument(
+        "--print-bundled-ffmpeg", action="store_true",
+        help=(
+            "Diagnostic: print any auto-detected bundled ffmpeg/ffprobe paths "
+            "(as FFMPEG=... / FFPROBE=... lines) and exit immediately, without "
+            "needing settings.ini. Used by the Windows build's CI to verify "
+            "FFmpeg was actually embedded in the built .exe."
+        ),
+    )
+    return parser
 
-          Write-Host "Bundled ffmpeg reported at:  $ffmpegPath"
-          Write-Host "Bundled ffprobe reported at: $ffprobePath"
 
-          & $ffmpegPath -version
-          if ($LASTEXITCODE -ne 0) { Write-Error "Bundled ffmpeg.exe did not run successfully."; exit 1 }
+def main(argv=None) -> int:
+    args = build_arg_parser().parse_args(argv)
 
-          & $ffprobePath -version
-          if ($LASTEXITCODE -ne 0) { Write-Error "Bundled ffprobe.exe did not run successfully."; exit 1 }
+    if args.print_bundled_ffmpeg:
+        from .bundled_ffmpeg import find_bundled_binary
+        print(f"FFMPEG={find_bundled_binary('ffmpeg') or 'NONE'}")
+        print(f"FFPROBE={find_bundled_binary('ffprobe') or 'NONE'}")
+        return 0
 
-          Write-Host "FFmpeg and FFprobe are bundled inside the .exe and run correctly."
+    settings_path = args.settings or _default_settings_path()
 
-      - name: Assemble distributable folder
-        run: |
-          $dist = "package/shorts-generator"
-          New-Item -ItemType Directory -Force -Path "$dist/input" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$dist/output" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$dist/logs" | Out-Null
-          Copy-Item "dist/shorts-generator.exe" "$dist/"
-          Copy-Item "settings.ini" "$dist/"
-          Copy-Item -Recurse "assets" "$dist/assets"
-          Copy-Item "README.md" "$dist/"
-          Copy-Item "vendor/win64/NOTICE.md" "$dist/FFMPEG-NOTICE.md"
-          Copy-Item "vendor/win64/LICENSE-FFMPEG-GPLv3.txt" "$dist/"
-          Compress-Archive -Path "$dist" -DestinationPath "package/shorts-generator-windows.zip"
+    try:
+        settings = load_settings(settings_path)
+    except ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: shorts-generator-windows
-          path: package/shorts-generator-windows.zip
+    # CLI overrides applied after loading/validating the base file.
+    if args.input_dir:
+        settings.input_dir = args.input_dir
+    if args.output_dir:
+        settings.output_dir = args.output_dir
+    if args.fit_mode:
+        settings.fit_mode = args.fit_mode
+    if args.overwrite:
+        settings.overwrite_existing = True
 
-      - name: Publish GitHub Release (tagged builds only)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: package/shorts-generator-windows.zip
+    logger = setup_logging(settings.log_dir, verbose=args.verbose)
+    logger.info("Settings loaded from %s", settings_path)
+    logger.info("Input dir  : %s", settings.input_dir)
+    logger.info("Output dir : %s", settings.output_dir)
+    logger.info("Fit mode   : %s", settings.fit_mode)
+
+    summary = run_batch(settings)
+
+    if summary.failed:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
