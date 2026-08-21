@@ -1,0 +1,71 @@
+# Builds a real, self-contained Windows executable on an actual Windows
+# GitHub Actions runner (PyInstaller cannot cross-compile, so this step
+# genuinely has to run on Windows -- it cannot be done from a Linux/macOS
+# machine or CI runner).
+#
+# Trigger it either:
+#   - manually: repo's "Actions" tab -> "Build Windows exe" -> "Run workflow"
+#   - automatically: push a tag like "v1.0.0" (this also publishes a
+#     GitHub Release with the .exe attached, ready to download)
+#
+# Either way, the output is downloadable from the "Actions" run's
+# "Artifacts" section, or from the repo's "Releases" page for a tagged
+# build -- both are the ordinary "click to download" experience.
+name: Build Windows exe
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r build_tools/requirements-windows.txt
+
+      - name: Build shorts-generator.exe
+        run: python build_tools/build_exe.py
+
+      - name: Verify FFmpeg was bundled
+        run: |
+          if ((Get-Item "dist/shorts-generator.exe").Length -lt 100MB) {
+            Write-Error "dist/shorts-generator.exe looks too small -- FFmpeg may not have bundled correctly."
+            exit 1
+          }
+
+      - name: Assemble distributable folder
+        run: |
+          $dist = "package/shorts-generator"
+          New-Item -ItemType Directory -Force -Path "$dist/input" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$dist/output" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$dist/logs" | Out-Null
+          Copy-Item "dist/shorts-generator.exe" "$dist/"
+          Copy-Item "settings.ini" "$dist/"
+          Copy-Item -Recurse "assets" "$dist/assets"
+          Copy-Item "README.md" "$dist/"
+          Copy-Item "vendor/win64/NOTICE.md" "$dist/FFMPEG-NOTICE.md"
+          Copy-Item "vendor/win64/LICENSE-FFMPEG-GPLv3.txt" "$dist/"
+          Compress-Archive -Path "$dist" -DestinationPath "package/shorts-generator-windows.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shorts-generator-windows
+          path: package/shorts-generator-windows.zip
+
+      - name: Publish GitHub Release (tagged builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: package/shorts-generator-windows.zip
