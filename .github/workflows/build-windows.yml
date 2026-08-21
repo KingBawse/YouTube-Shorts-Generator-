@@ -44,31 +44,20 @@ jobs:
           $sizeMB = [math]::Round($exe.Length / 1MB, 1)
           Write-Host "dist/shorts-generator.exe is $sizeMB MB"
 
-          # Ask the built exe itself where it thinks its bundled ffmpeg/ffprobe
-          # are (this exercises the exact same lookup the real app uses at
-          # runtime), then actually execute what it finds -- a file-size
-          # guess isn't reliable evidence either way (PyInstaller may apply
-          # UPX compression on this runner, which can shrink stripped FFmpeg
-          # builds a lot without breaking them).
-          $diag = & "dist/shorts-generator.exe" --print-bundled-ffmpeg
-          $diag | ForEach-Object { Write-Host $_ }
-
-          $ffmpegPath = ($diag | Where-Object { $_ -like "FFMPEG=*" }) -replace '^FFMPEG=', ''
-          $ffprobePath = ($diag | Where-Object { $_ -like "FFPROBE=*" }) -replace '^FFPROBE=', ''
-
-          if ([string]::IsNullOrEmpty($ffmpegPath) -or $ffmpegPath -eq "NONE" -or [string]::IsNullOrEmpty($ffprobePath) -or $ffprobePath -eq "NONE") {
-            Write-Error "The built exe did not report a bundled ffmpeg/ffprobe (ffmpeg=$ffmpegPath ffprobe=$ffprobePath)."
+          # This single invocation locates the bundled ffmpeg/ffprobe AND
+          # actually runs "-version" on both, all from inside that one
+          # still-running process. PyInstaller's onefile mode extracts
+          # bundled files to a temp "_MEI..." folder and deletes that
+          # folder the instant the process exits -- so a *separate*
+          # PowerShell command trying to run a previously-reported path
+          # afterwards is doomed to fail with "term not recognized", even
+          # when bundling worked perfectly. Testing everything in one
+          # process is the only reliable way to verify it.
+          & "dist/shorts-generator.exe" --print-bundled-ffmpeg
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Bundled ffmpeg/ffprobe check failed (exit code $LASTEXITCODE) -- see output above."
             exit 1
           }
-
-          Write-Host "Bundled ffmpeg reported at:  $ffmpegPath"
-          Write-Host "Bundled ffprobe reported at: $ffprobePath"
-
-          & $ffmpegPath -version
-          if ($LASTEXITCODE -ne 0) { Write-Error "Bundled ffmpeg.exe did not run successfully."; exit 1 }
-
-          & $ffprobePath -version
-          if ($LASTEXITCODE -ne 0) { Write-Error "Bundled ffprobe.exe did not run successfully."; exit 1 }
 
           Write-Host "FFmpeg and FFprobe are bundled inside the .exe and run correctly."
 
