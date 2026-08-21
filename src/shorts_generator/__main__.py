@@ -52,11 +52,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Overwrite existing output files (overrides [batch] overwrite_existing).",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug-level logging.")
+    parser.add_argument(
+        "--print-bundled-ffmpeg", action="store_true",
+        help=(
+            "Diagnostic: print any auto-detected bundled ffmpeg/ffprobe paths "
+            "(as FFMPEG=... / FFPROBE=... lines) and exit immediately, without "
+            "needing settings.ini. Used by the Windows build's CI to verify "
+            "FFmpeg was actually embedded in the built .exe."
+        ),
+    )
     return parser
 
 
 def main(argv=None) -> int:
     args = build_arg_parser().parse_args(argv)
+
+    if args.print_bundled_ffmpeg:
+        from .bundled_ffmpeg import find_bundled_binary
+        print(f"FFMPEG={find_bundled_binary('ffmpeg') or 'NONE'}")
+        print(f"FFPROBE={find_bundled_binary('ffprobe') or 'NONE'}")
+        return 0
+
     settings_path = args.settings or _default_settings_path()
 
     try:
