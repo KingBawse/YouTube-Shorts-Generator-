@@ -56,9 +56,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--print-bundled-ffmpeg", action="store_true",
         help=(
             "Diagnostic: print any auto-detected bundled ffmpeg/ffprobe paths "
-            "(as FFMPEG=... / FFPROBE=... lines) and exit immediately, without "
-            "needing settings.ini. Used by the Windows build's CI to verify "
-            "FFmpeg was actually embedded in the built .exe."
+            "(as FFMPEG=... / FFPROBE=... lines), actually execute '-version' "
+            "on both from within this same process, and exit -- without "
+            "needing settings.ini. Used by the Windows build's CI to prove "
+            "FFmpeg was actually embedded in the built .exe and runs."
         ),
     )
     return parser
@@ -69,8 +70,40 @@ def main(argv=None) -> int:
 
     if args.print_bundled_ffmpeg:
         from .bundled_ffmpeg import find_bundled_binary
-        print(f"FFMPEG={find_bundled_binary('ffmpeg') or 'NONE'}")
-        print(f"FFPROBE={find_bundled_binary('ffprobe') or 'NONE'}")
+        import subprocess
+
+        ffmpeg_path = find_bundled_binary("ffmpeg")
+        ffprobe_path = find_bundled_binary("ffprobe")
+        print(f"FFMPEG={ffmpeg_path or 'NONE'}")
+        print(f"FFPROBE={ffprobe_path or 'NONE'}")
+
+        if not ffmpeg_path or not ffprobe_path:
+            print("One or both bundled binaries were not found.", file=sys.stderr)
+            return 1
+
+        # Actually execute "-version" on both binaries from *within this
+        # same process*, while PyInstaller's onefile temp extraction
+        # directory is still alive. That directory is deleted the moment
+        # this process exits, so merely reporting the path isn't proof it
+        # works -- a separate process/step trying to run it afterwards
+        # would find nothing there. Running it here is the only way to
+        # verify the bundled binaries genuinely execute.
+        for label, path in (("ffmpeg", ffmpeg_path), ("ffprobe", ffprobe_path)):
+            try:
+                result = subprocess.run(
+                    [path, "-version"], capture_output=True, text=True, timeout=30
+                )
+            except Exception as exc:  # noqa: BLE001 - report and fail, don't crash oddly
+                print(f"FAILED to execute bundled {label}: {exc}", file=sys.stderr)
+                return 1
+            if result.returncode != 0:
+                print(f"Bundled {label} exited with code {result.returncode}", file=sys.stderr)
+                print(result.stderr, file=sys.stderr)
+                return 1
+            first_line = (result.stdout.splitlines() or [""])[0]
+            print(f"{label} -version: {first_line}")
+
+        print("Bundled ffmpeg and ffprobe both executed successfully.")
         return 0
 
     settings_path = args.settings or _default_settings_path()
