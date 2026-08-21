@@ -1,0 +1,13 @@
+# Runtime dependencies
+# ---------------------
+# Pillow is used only to pre-render the "gradient" background fit mode
+# to a cached PNG (see src/shorts_generator/background/gradient.py).
+# Everything else in the application relies solely on the Python
+# standard library plus an external ffmpeg/ffprobe installation.
+Pillow>=10.0,<12.0
+
+# Build-time / packaging dependency
+# ----------------------------------
+# Needed only to run build_tools/build_exe.py; not required to run the
+# application from source.
+pyinstaller>=6.0

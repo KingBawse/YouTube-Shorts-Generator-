@@ -1,0 +1,13 @@
+# Extra, Windows-build-only dependency: NOT needed to run the app from
+# source, and not installed on Linux/macOS. Only used by
+# build_tools/build_exe.py, on Windows, to locate real ffmpeg.exe /
+# ffprobe.exe binaries to embed into the built .exe.
+#
+# Install alongside the main requirements.txt before building on Windows:
+#     pip install -r requirements.txt
+#     pip install -r build_tools/requirements-windows.txt
+#     python build_tools/build_exe.py
+#
+# See vendor/win64/NOTICE.md for what this package provides and its
+# (GPLv3) licensing.
+ffmpeg-binaries==1.1.0
